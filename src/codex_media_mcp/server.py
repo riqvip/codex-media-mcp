@@ -7,6 +7,7 @@ from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from .measurements import InspectionCheck, InspectionThresholds
 from .media import TimeRange
 from .service import MediaService
 from .settings import Settings
@@ -18,6 +19,8 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         "Codex Media",
         instructions=(
             "Use inspect_media to check local audio/video duration before selecting a range. "
+            "Its optional checks measure silence, black/frozen frames, loudness and audio peaks "
+            "locally, with configurable thresholds and original-file timestamp ranges. "
             "analyze_media physically trims time_range before sending it to OpenRouter; omit the "
             "range for whole-file analysis and omit question for a very detailed summary. Paths "
             "are absolute paths in the user's Linux filesystem, even when the server is in Docker. "
@@ -36,13 +39,24 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     )
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
-    async def inspect_media(path: str) -> dict[str, Any]:
-        """Inspect a local video/audio file's duration, streams, dimensions and frame rate.
+    async def inspect_media(
+        path: str,
+        checks: list[InspectionCheck] | None = None,
+        time_range: TimeRange | None = None,
+        thresholds: InspectionThresholds | None = None,
+    ) -> dict[str, Any]:
+        """Inspect local media metadata and optionally run local measurements with FFmpeg.
 
-        Use an absolute Linux path. Runs FFprobe locally; uploads nothing and needs no API key.
+        Omit checks for quick duration, codec, streams, dimensions, FPS and stream-end timing.
+        checks may include silence, black_frames, loudness, audio_peaks and freeze_frames.
+        time_range selects {start_seconds, end_seconds} in the original file; omit for whole-file.
+        thresholds optionally overrides silence/black/freeze/peak sensitivity and minimum durations.
+        Returns original-file timestamps, bounded intervals and explicit unavailable/error statuses.
+        High sample peaks are not proof of clipping; static/dark/quiet content can be intentional.
+        Uses original decoded media with no upload or API credit; no OpenRouter key is needed.
         File access follows normal Linux permissions; follow the user's filesystem instructions.
         """
-        return await service.inspect_media(path)
+        return await service.inspect_media(path, checks, time_range, thresholds)
 
     @mcp.tool(
         annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True, idempotentHint=False)

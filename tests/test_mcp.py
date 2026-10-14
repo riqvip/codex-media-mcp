@@ -24,6 +24,14 @@ async def test_real_mcp_handshake_catalog_and_error():
                     tools = {tool.name: tool for tool in listed.tools}
                     assert set(tools) == {"inspect_media", "analyze_media"}
                     assert all(tool.outputSchema["type"] == "object" for tool in tools.values())
+                    inspect_schema = tools["inspect_media"].inputSchema
+                    assert inspect_schema["required"] == ["path"]
+                    assert set(inspect_schema["properties"]) == {
+                        "path",
+                        "checks",
+                        "time_range",
+                        "thresholds",
+                    }
                     schema = tools["analyze_media"].inputSchema
                     assert schema["required"] == ["path"]
                     assert set(schema["properties"]) == {"path", "question", "time_range"}

@@ -38,11 +38,12 @@ def register(home: Path, port: int) -> None:
         block = block.rstrip() + "\ntool_timeout_sec = 960\n\n"
     modified = content[: header.end()] + block + content[end:]
     # A long whole-file analysis can be larger than Codex's ordinary tool budget.
-    tool = tomllib.loads(modified)["mcp_servers"]["media"].get("tools", {}).get("analyze_media")
-    if tool is None:
-        modified = modified.rstrip() + (
-            "\n\n[mcp_servers.media.tools.analyze_media]\noutput_token_limit = 40000\n"
-        )
+    for tool_name in ("analyze_media", "inspect_media"):
+        tool = tomllib.loads(modified)["mcp_servers"]["media"].get("tools", {}).get(tool_name)
+        if tool is None:
+            modified = modified.rstrip() + (
+                f"\n\n[mcp_servers.media.tools.{tool_name}]\noutput_token_limit = 40000\n"
+            )
     tomllib.loads(modified)  # Verify TOML before writing.
     if modified != content:
         config.write_text(modified)

@@ -2,7 +2,8 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from .media import MediaError, TimeRange, extract_clip, inspect, segments
+from .measurements import CHECKS, InspectionCheck, InspectionThresholds, measure
+from .media import MediaError, TimeRange, extract_clip, inspect, segments, selected_range
 from .provider import OpenRouter
 from .settings import Settings
 
@@ -13,8 +14,54 @@ class MediaService:
         self.provider = provider or OpenRouter(settings)
         self._lock = asyncio.Lock()
 
-    async def inspect_media(self, path: str) -> dict:
-        return (await inspect(path, self.settings)).public()
+    async def inspect_media(
+        self,
+        path: str,
+        checks: list[InspectionCheck] | None = None,
+        time_range: TimeRange | None = None,
+        thresholds: InspectionThresholds | None = None,
+    ) -> dict:
+        checks = list(dict.fromkeys(checks or []))
+        if set(checks) - CHECKS:
+            raise MediaError(
+                "Unknown inspection check. Use silence, black_frames, loudness, "
+                "audio_peaks or freeze_frames."
+            )
+        info = await inspect(path, self.settings)
+        start, end = selected_range(info, time_range)
+        result = info.public()
+        if not checks:
+            if time_range:
+                result["inspection_range"] = {"start_seconds": start, "end_seconds": end}
+            return result
+        if self._lock.locked():
+            raise MediaError("Another media scan or analysis is running. Retry when it finishes.")
+        thresholds = thresholds or InspectionThresholds()
+        async with self._lock:
+            try:
+                async with asyncio.timeout(self.settings.inspect_timeout):
+                    measurements = await measure(
+                        info, start, end, checks, thresholds, self.settings
+                    )
+            except TimeoutError as exc:
+                raise MediaError(
+                    "Inspection timed out. Select a shorter time_range or increase "
+                    "MEDIA_INSPECT_TIMEOUT_SECONDS."
+                ) from exc
+        result.update(
+            {
+                "inspection_range": {"start_seconds": start, "end_seconds": end},
+                "requested_checks": checks,
+                "thresholds": thresholds.model_dump(),
+                "inspection_complete": all(v["status"] != "error" for v in measurements.values()),
+                "measurements": measurements,
+                "measurement_guidance": "Measurements of the first primary audio/video streams. "
+                "Times refer to original-file playback. Measurements can be "
+                "intentional content; peaks are windowed, not proof of clipping. "
+                "Check per-measurement status and intervals_truncated flags.",
+            }
+        )
+        return result
 
     async def analyze_media(
         self, path: str, question: str | None = None, time_range: TimeRange | None = None

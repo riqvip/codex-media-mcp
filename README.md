@@ -7,8 +7,10 @@ Useful for reviewing rendered videos, investigating recorded bugs, describing
 music, checking narration, and asking focused questions about a particular clip.
 The server also works with other MCP clients that support Streamable HTTP.
 
-`inspect_media(path)` reads duration, streams, dimensions and frame rate locally.
-It uploads nothing and does not need a key.
+`inspect_media(path, checks?, time_range?, thresholds?)` reads duration, codecs,
+stream timing, audio channels/sample rate, dimensions and frame rate locally.
+Optional checks measure silence, black/frozen frames, loudness and audio peaks.
+It uploads nothing and does not need a key. Omit checks for quick metadata only.
 
 `analyze_media(path, question?, time_range?)` returns detailed chronological
 observations, speech, sounds, readable text and uncertainty. Without a question,
@@ -28,6 +30,66 @@ The server **physically extracts only 02:00–02:45** before uploading. It prese
 audio in video clips, accurately seeks by re-encoding instead of copying from an
 earlier keyframe, and supplies the original-file timestamp offset to the model.
 Reported timestamps are approximate model observations, not measured event times.
+
+## Local measurements with inspect_media
+
+```json
+{
+  "path": "/home/example/projects/demo/render.mp4",
+  "checks": ["silence", "black_frames", "loudness", "audio_peaks", "freeze_frames"],
+  "time_range": {"start_seconds": 120, "end_seconds": 165},
+  "thresholds": {
+    "silence_dbfs": -40,
+    "min_silence_seconds": 0.5,
+    "peak_dbfs": -1,
+    "min_freeze_seconds": 2
+  }
+}
+```
+
+All parameters except `path` are optional. Omit `time_range` to scan the whole
+file. Measurements use the original decoded video/audio, with **no resolution or
+FPS cap**, no uploaded clips, no OpenRouter requests and no API key requirement.
+
+| Check | Result | Default threshold |
+| --- | --- | --- |
+| `silence` | Quiet intervals across all audio channels | -40 dBFS, at least 0.5 seconds |
+| `black_frames` | Dark intervals meeting the configured pixel ratio | At least 98% black pixels, 0.1 pixel threshold, at least 0.5 seconds |
+| `freeze_frames` | Intervals with little frame-to-frame change | -60 dB difference tolerance, at least 2 seconds |
+| `audio_peaks` | Sample peak and merged threshold-crossing windows | -1 dBFS threshold, 0.1-second windows |
+| `loudness` | EBU R128 integrated LUFS, loudness range and true peak | Measures the selected audio; no target normalization |
+
+Use `thresholds` to override defaults. Additional fields are `min_black_seconds`,
+`black_pixel_threshold`, `black_frame_ratio`, `peak_window_seconds` and
+`freeze_noise_db`. Thresholds and intervals are returned with the measurements.
+
+Interval timestamps refer to original-file playback, with time zero at the input's
+playback start rather than an embedded recording timecode. Ranged scans retain
+that timeline. An `ends_at_scan_boundary` flag means an event was still ongoing
+at the scan/stream end and may continue outside the selected range. Video timing
+has frame precision; EOF boundaries can be estimated when stream duration is
+unknown (`boundary_end_estimated`). Audio peak intervals locate windows containing
+high samples, rather than exact individual sample timestamps. Container timestamp
+precision is respected when grouping adjacent windows.
+
+Each requested measurement has a `status` of `complete`, `unavailable` or `error`.
+Absent streams and ranges with no usable stream data are unavailable, not zero
+measurements. A failed check is explicit and other completed results remain.
+`inspection_complete` is false on scan errors. An overall scan timeout returns an
+error and terminates FFmpeg. Metadata-only inspection can run while a scan or
+OpenRouter analysis is in progress; heavy operations run one at a time.
+
+Silence, dark scenes and static frames can be intentional. High sample peaks
+alone **do not prove clipping**. Short/very quiet audio can have no gated LUFS
+measurement; these values are null with an explicit availability flag. Audio and
+video end-time differences in `stream_timing` are metadata measurements, not
+lip-sync detection. The first primary audio/video streams are scanned.
+
+Output retains at most 100 intervals per check by default. `total_intervals`,
+`total_duration_seconds` and `intervals_truncated` report the full scan even when
+the returned interval list is bounded. Select a narrower range to examine more
+detail. Tune `MEDIA_INSPECT_MAX_INTERVALS` or `MEDIA_INSPECT_TIMEOUT_SECONDS`
+(default 900 seconds) in the server environment when needed.
 
 ## Start with Docker
 
@@ -73,8 +135,8 @@ configuration. Temporary clips are removed after success, failure or cancellatio
 
 ## Connect Codex
 
-The following registers this endpoint and sets a 960-second tool timeout and a
-larger analysis output budget while preserving unrelated configuration:
+The following registers this endpoint and sets a 960-second tool timeout and
+larger output budgets for both tools while preserving unrelated configuration:
 
 ```bash
 python3 scripts/register_codex.py
@@ -182,13 +244,23 @@ docker build --target test -t codex-media-mcp-test .
 
 Tests verify actual uploaded clip duration and frame colors, audio payloads,
 segmentation, partial coverage, size limits, timeout cleanup, credential redaction,
-symlink mapping and an official MCP SDK client handshake. Host tests skip the
+symlink mapping, local measurement intervals and an official MCP SDK client
+handshake. Measurement fixtures contain known silence, dark frames, static scenes,
+peak bursts and mismatched stream lengths. Host tests skip the
 FFmpeg integration cases when FFmpeg is absent.
 
 Test the running Docker endpoint without making paid API calls:
 
 ```bash
 uv run python scripts/smoke_test.py --path /absolute/path/demo.mp4
+```
+
+Exercise local checks through the deployed MCP endpoint, without API requests:
+
+```bash
+uv run python scripts/smoke_test.py --path /absolute/path/demo.mp4 \
+  --checks silence black_frames loudness audio_peaks freeze_frames \
+  --start 120 --end 165 --thresholds '{"min_silence_seconds": 0.25}'
 ```
 
 To test the complete delivery path with a real paid model call:
@@ -205,6 +277,7 @@ uv run python scripts/smoke_test.py --path /absolute/path/demo.mp4 \
 - [OpenRouter video input](https://openrouter.ai/docs/guides/overview/multimodal/videos)
 - [OpenRouter audio input](https://openrouter.ai/docs/guides/overview/multimodal/audio)
 - [Qwen3.8 Omni Flash](https://openrouter.ai/qwen/qwen3.8-omni-flash)
+- [FFmpeg measurement filters](https://ffmpeg.org/ffmpeg-filters.html)
 - [Docker restart policies](https://docs.docker.com/engine/containers/start-containers-automatically/)
 - [WSL systemd](https://learn.microsoft.com/en-us/windows/wsl/systemd)
 

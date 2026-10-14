@@ -17,6 +17,8 @@ class Settings:
     provider_timeout: float = 240
     call_timeout: float = 900
     ffmpeg_timeout: float = 180
+    inspect_timeout: float = 900
+    inspect_max_intervals: int = 100
     video_max_edge: int = 1920
     video_max_fps: int = 30
     video_crf: int = 23
@@ -58,6 +60,8 @@ class Settings:
             provider_timeout=number("MEDIA_PROVIDER_TIMEOUT_SECONDS", 240),
             call_timeout=number("MEDIA_CALL_TIMEOUT_SECONDS", 900),
             ffmpeg_timeout=number("MEDIA_FFMPEG_TIMEOUT_SECONDS", 180),
+            inspect_timeout=number("MEDIA_INSPECT_TIMEOUT_SECONDS", 900),
+            inspect_max_intervals=integer("MEDIA_INSPECT_MAX_INTERVALS", 100),
             video_max_edge=edge,
             video_max_fps=integer("MEDIA_VIDEO_MAX_FPS", 30),
             video_crf=crf,

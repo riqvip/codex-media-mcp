@@ -4,6 +4,7 @@ import math
 import os
 from collections import deque
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -97,6 +98,9 @@ class MediaInfo:
     width: int | None
     height: int | None
     fps: float | None
+    streams: tuple[dict, ...] = ()
+    format_name: str | None = None
+    format_start_seconds: float = 0
 
     @property
     def kind(self) -> str:
@@ -113,6 +117,9 @@ class MediaInfo:
             "width": self.width,
             "height": self.height,
             "fps": self.fps,
+            "format_name": self.format_name,
+            "streams": list(self.streams),
+            "stream_timing": stream_timing(self),
         }
 
 
@@ -136,7 +143,9 @@ async def inspect(path: str, settings: Settings) -> MediaInfo:
                 "-protocol_whitelist",
                 "file,pipe",
                 "-show_entries",
-                "format=duration,format_name:stream=codec_type,width,height,avg_frame_rate:"
+                "format=duration,format_name,start_time:"
+                "stream=index,codec_type,codec_name,width,height,avg_frame_rate,"
+                "duration,start_time,sample_rate,channels,channel_layout,pix_fmt,time_base:"
                 "stream_disposition=attached_pic",
                 "-of",
                 "json",
@@ -185,6 +194,9 @@ async def inspect(path: str, settings: Settings) -> MediaInfo:
             video.get("width") if video else None,
             video.get("height") if video else None,
             fps,
+            tuple(stream_metadata(s) for s in streams),
+            data["format"].get("format_name"),
+            finite_number(data["format"].get("start_time")) or 0,
         )
     except (KeyError, ValueError, TypeError) as exc:
         raise MediaError(
@@ -192,9 +204,7 @@ async def inspect(path: str, settings: Settings) -> MediaInfo:
         ) from exc
 
 
-def segments(
-    info: MediaInfo, requested: TimeRange | None, settings: Settings
-) -> list[tuple[float, float]]:
+def selected_range(info: MediaInfo, requested: TimeRange | None) -> tuple[float, float]:
     start = requested.start_seconds if requested else 0.0
     end = requested.end_seconds if requested else info.duration_seconds
     if start >= info.duration_seconds or end > info.duration_seconds + 0.05:
@@ -202,6 +212,13 @@ def segments(
             f"Range is outside the file's {info.duration_seconds:.3f}-second duration."
         )
     end = min(end, info.duration_seconds)
+    return start, end
+
+
+def segments(
+    info: MediaInfo, requested: TimeRange | None, settings: Settings
+) -> list[tuple[float, float]]:
+    start, end = selected_range(info, requested)
     count = math.ceil((end - start) / settings.segment_seconds)
     if count > settings.max_segments:
         raise MediaError(
@@ -212,6 +229,62 @@ def segments(
         (start + i * settings.segment_seconds, min(end, start + (i + 1) * settings.segment_seconds))
         for i in range(count)
     ]
+
+
+def finite_number(value) -> float | None:
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (ValueError, TypeError):
+        return None
+
+
+def stream_metadata(stream: dict) -> dict:
+    result = {
+        "index": stream.get("index"),
+        "kind": stream.get("codec_type"),
+        "codec": stream.get("codec_name"),
+        "start_seconds": finite_number(stream.get("start_time")),
+        "duration_seconds": finite_number(stream.get("duration")),
+        "attached_picture": bool(stream.get("disposition", {}).get("attached_pic")),
+    }
+    for key in ("width", "height", "channels", "channel_layout", "pix_fmt"):
+        if key in stream:
+            result[key] = stream[key]
+    if "sample_rate" in stream:
+        result["sample_rate"] = int(stream["sample_rate"])
+    try:
+        result["time_base_seconds"] = float(Fraction(stream.get("time_base", "0"))) or None
+    except (ValueError, TypeError, ZeroDivisionError):
+        result["time_base_seconds"] = None
+    return result
+
+
+def primary_stream(info: MediaInfo, kind: str) -> dict:
+    return next((s for s in info.streams if s["kind"] == kind and not s["attached_picture"]), {})
+
+
+def stream_timing(info: MediaInfo) -> dict:
+    video = primary_stream(info, "video")
+    audio = primary_stream(info, "audio")
+
+    def end(stream):
+        if stream.get("start_seconds") is None or stream.get("duration_seconds") is None:
+            return None
+        return stream["start_seconds"] - info.format_start_seconds + stream["duration_seconds"]
+
+    video_end, audio_end = end(video), end(audio)
+    return {
+        "video_end_seconds": video_end,
+        "audio_end_seconds": audio_end,
+        "audio_minus_video_end_seconds": (
+            round(audio_end - video_end, 6)
+            if video_end is not None and audio_end is not None
+            else None
+        ),
+        "note": "First audio/video stream end times from metadata, relative to playback start. "
+        "Unknown timing is null. An end-time difference does not measure lip sync.",
+    }
 
 
 async def extract_clip(

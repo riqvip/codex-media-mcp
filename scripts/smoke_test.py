@@ -17,22 +17,24 @@ async def check(args) -> None:
             await session.initialize()
             print("Available tools:", ", ".join(t.name for t in (await session.list_tools()).tools))
             for path in args.path:
-                result = await session.call_tool("inspect_media", {"path": path})
+                arguments = {"path": path}
+                if args.start is not None or args.end is not None:
+                    if args.start is None or args.end is None:
+                        raise ValueError("Provide both --start and --end")
+                    arguments["time_range"] = {"start_seconds": args.start, "end_seconds": args.end}
+                inspection = dict(arguments)
+                if args.checks:
+                    inspection["checks"] = args.checks
+                if args.thresholds:
+                    inspection["thresholds"] = json.loads(args.thresholds)
+                result = await session.call_tool("inspect_media", inspection)
                 if result.isError:
                     raise RuntimeError(result.content[0].text)
                 data = result.structuredContent or json.loads(result.content[0].text)
                 print("Inspected:", json.dumps(data, indent=2))
                 if args.analyze:
-                    arguments = {"path": path}
                     if args.question:
                         arguments["question"] = args.question
-                    if args.start is not None or args.end is not None:
-                        if args.start is None or args.end is None:
-                            raise ValueError("Provide both --start and --end")
-                        arguments["time_range"] = {
-                            "start_seconds": args.start,
-                            "end_seconds": args.end,
-                        }
                     result = await session.call_tool("analyze_media", arguments)
                     if result.isError:
                         raise RuntimeError(result.content[0].text)
@@ -45,6 +47,18 @@ def main() -> None:
     parser.add_argument("--url", default="http://127.0.0.1:8766/mcp")
     parser.add_argument("--path", action="append", default=[])
     parser.add_argument("--analyze", action="store_true")
+    parser.add_argument(
+        "--checks",
+        nargs="+",
+        choices=[
+            "silence",
+            "black_frames",
+            "loudness",
+            "audio_peaks",
+            "freeze_frames",
+        ],
+    )
+    parser.add_argument("--thresholds", help="JSON object overriding local measurement thresholds")
     parser.add_argument("--question")
     parser.add_argument("--start", type=float)
     parser.add_argument("--end", type=float)
