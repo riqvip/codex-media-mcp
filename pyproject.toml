@@ -1,0 +1,33 @@
+[project]
+name = "codex-media-mcp"
+version = "0.1.0"
+description = "Local video and audio analysis tools for Codex, backed by OpenRouter."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["mcp>=1.30,<2", "httpx>=0.28,<1"]
+
+[project.urls]
+Repository = "https://github.com/riqvip/codex-media-mcp"
+Issues = "https://github.com/riqvip/codex-media-mcp/issues"
+
+[project.scripts]
+codex-media-mcp = "codex_media_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=9,<10", "pytest-asyncio>=1,<2", "ruff>=0.17,<1"]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

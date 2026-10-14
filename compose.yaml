@@ -1,0 +1,35 @@
+name: codex-media-mcp
+services:
+  media:
+    build: .
+    restart: unless-stopped
+    init: true
+    # Host paths are translated into this read-only Linux filesystem mount.
+    # No path permission policy is imposed by the tool.
+    user: "${MEDIA_UID:-1000}:${MEDIA_GID:-1000}"
+    env_file: .env
+    environment:
+      MEDIA_MCP_HOST: 0.0.0.0
+      MEDIA_MCP_PORT: 8765
+      MEDIA_HOST_FS_ROOT: /host
+    ports:
+      - "127.0.0.1:${MEDIA_MCP_PORT:-8766}:8765"
+    volumes:
+      - type: bind
+        source: /
+        target: /host
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: 2
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.venv/
+.codex/
+.agents/
+.aws/
+VERIFICATION.md
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+media/
