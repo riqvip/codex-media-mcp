@@ -20,6 +20,9 @@ Do not invent identities.
 Use timestamps relative to the ORIGINAL file as instructed in the request; these are approximate
 observations, not frame-exact measurements. If a question is supplied, answer it thoroughly with
 timestamped evidence and relevant surrounding context. End with uncertainties and coverage limits.
+Providers may sparsely sample video even when the uploaded frame rate is higher. Never claim to
+have examined every frame. Say a brief event was not observed rather than proving it absent from
+unsampled intervals. Do not invent events to satisfy a question about possible rapid changes.
 """
 
 
@@ -61,10 +64,16 @@ class OpenRouter:
             "model": model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": [{"type": "text", "text": prompt}, media_part]},
+                {"role": "user", "content": [media_part, {"type": "text", "text": prompt}]},
             ],
             "max_tokens": self.settings.max_output_tokens,
         }
+        if self.settings.reasoning_max_tokens is not None:
+            payload["reasoning"] = {"max_tokens": self.settings.reasoning_max_tokens}
+        elif self.settings.reasoning_effort != "default":
+            payload["reasoning"] = {"effort": self.settings.reasoning_effort}
+        if self.settings.provider:
+            payload["provider"] = {"only": [self.settings.provider], "allow_fallbacks": False}
         try:
             async with httpx.AsyncClient(
                 transport=self.transport,
@@ -101,14 +110,37 @@ class OpenRouter:
             finish_reason = choice.get("finish_reason")
             if finish_reason not in ("stop", "length", None):
                 raise MediaError("The provider did not complete the media analysis normally.")
+            raw_usage = body.get("usage") or {}
+            usage = {
+                k: v
+                for k, v in raw_usage.items()
+                if k in {"prompt_tokens", "completion_tokens", "total_tokens", "cost"}
+            }
+            details = raw_usage.get("completion_tokens_details") or {}
+            reasoning_tokens = details.get("reasoning_tokens")
+            if isinstance(reasoning_tokens, int) and not isinstance(reasoning_tokens, bool):
+                if reasoning_tokens >= 0:
+                    usage["reasoning_tokens"] = reasoning_tokens
+                    completion_tokens = usage.get("completion_tokens")
+                    if isinstance(completion_tokens, int) and completion_tokens >= reasoning_tokens:
+                        usage["visible_completion_tokens"] = completion_tokens - reasoning_tokens
+            input_details = raw_usage.get("prompt_tokens_details") or {}
+            for source_key, output_key in (
+                ("cached_tokens", "cached_input_tokens"),
+                ("video_tokens", "video_input_tokens"),
+                ("audio_tokens", "audio_input_tokens"),
+            ):
+                count = input_details.get(source_key)
+                if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                    usage[output_key] = count
             return {
                 "analysis": content.strip(),
                 "model": body.get("model", model),
-                "usage": {
-                    k: v
-                    for k, v in body.get("usage", {}).items()
-                    if k in {"prompt_tokens", "completion_tokens", "total_tokens", "cost"}
-                },
+                "provider": body.get("provider"),
+                "request_id": body.get("id"),
+                "usage": usage,
+                "reasoning_effort": self.settings.reasoning_effort,
+                "reasoning_max_tokens": self.settings.reasoning_max_tokens,
                 "output_truncated": finish_reason == "length",
             }
         except httpx.TimeoutException as exc:

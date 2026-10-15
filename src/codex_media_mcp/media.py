@@ -317,15 +317,17 @@ async def extract_clip(
             f"scale=w='trunc(iw*min(1,{edge}/max(iw,ih))/2)*2':"
             f"h='trunc(ih*min(1,{edge}/max(iw,ih))/2)*2'"
         )
+        # Sample on the source timeline. Output-only -fpsmax can shift scene
+        # boundaries and drop the tail when reducing the frame rate sharply.
+        # Sample before scaling so discarded frames are not resized first.
+        fps = min(info.fps or settings.video_max_fps, settings.video_max_fps)
         args += [
             "-map",
             "0:V:0",
             "-map",
             "0:a:0?",
             "-vf",
-            scale,
-            "-fpsmax",
-            str(settings.video_max_fps),
+            f"fps={fps}:round=up,{scale}",
             "-c:v",
             "libx264",
             "-preset",
@@ -366,7 +368,21 @@ async def extract_clip(
             max_source_bytes=settings.max_upload_bytes,
         ),
     )
-    if abs(clip_info.duration_seconds - (end - start)) > 0.25:
+    # MP4 video duration is rounded to a frame period. At 2 FPS a short
+    # requested range can legitimately produce a single half-second frame.
+    duration_tolerance = (
+        max(0.25, 1 / clip_info.fps + 0.02)
+        if clip_info.has_video and clip_info.fps and clip_info.fps > 0
+        else 0.25
+    )
+    audio_duration = primary_stream(clip_info, "audio").get("duration_seconds")
+    if (
+        abs(clip_info.duration_seconds - (end - start)) > duration_tolerance
+        or info.has_audio
+        and not clip_info.has_audio
+        or audio_duration is not None
+        and abs(audio_duration - (end - start)) > 0.25
+    ):
         raise MediaError(
             "The extracted clip did not cover the requested range. No clip was uploaded."
         )

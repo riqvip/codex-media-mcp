@@ -1,7 +1,7 @@
 # Codex Media MCP
 
 A local MCP server that gives regular Codex video and audio analysis through
-OpenRouter. The default model is `qwen/qwen3.8-omni-flash`. No Codex fork is needed.
+OpenRouter. The default model is `google/gemini-3.5-flash-lite`. No Codex fork is needed.
 
 Useful for reviewing rendered videos, investigating recorded bugs, describing
 music, checking narration, and asking focused questions about a particular clip.
@@ -109,6 +109,35 @@ chmod 600 .env
 Set `OPENROUTER_API_KEY` in `.env`. Change `OPENROUTER_MODEL` if desired; the
 selected model/provider must support the media input modality. A separate
 `OPENROUTER_AUDIO_MODEL` is optional. There is no automatic model fallback.
+`OPENROUTER_PROVIDER` optionally pins an OpenRouter provider/endpoint slug and
+disables provider fallback. Leave it empty to allow OpenRouter routing. Model
+and provider names and the OpenRouter request ID are reported with each analysis
+when the provider supplies them, making latency and billing easier to trace.
+
+`MEDIA_REASONING_EFFORT` controls thinking on compatible OpenRouter models:
+`default` leaves the provider policy unchanged; `none` disables thinking; `low`,
+`minimal`, `medium`, `high`, `xhigh`, and `max` request an effort level. Support
+varies by model/provider. Lower effort may reduce latency but can affect analysis
+quality; compare the same clip before changing your default. See
+[OpenRouter reasoning controls](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+Alternatively, set a positive `MEDIA_REASONING_MAX_TOKENS` to request a thinking
+token budget on compatible models. Leave `MEDIA_REASONING_EFFORT=default` when
+using a token budget; the two controls are mutually exclusive. If neither is set,
+the server leaves the provider's thinking policy unchanged. Requested settings
+are reported per segment; check actual usage to see whether the provider honored
+them. Recreate the container after changing environment settings:
+`docker compose up -d --force-recreate --wait`.
+
+Analysis returns per-segment `timings.preprocess_seconds` (local FFmpeg encoding
+and validation) and `timings.provider_seconds` (request preparation, upload,
+provider wait, generation and response handling), plus top-level metadata and
+total timings. Provider time is not a measure of model computation alone.
+When returned by the provider, usage includes `reasoning_tokens` and derived
+`visible_completion_tokens`; absent values remain absent, rather than implying
+zero thinking. Reasoning text is not returned by this tool.
+Provider-reported cached, video and audio input token counts are included when
+available. Provider accounting may omit or inconsistently report media tokens;
+these fields do not independently establish what the model perceived.
 
 ```bash
 docker compose up -d --build
@@ -200,16 +229,31 @@ an error. `output_truncated` and `analysis_complete` report provider token limit
 Codex's own context/output budget can also limit very large results; narrower
 follow-up ranges are preferable to repeatedly uploading a long file.
 
-Video is normalized to H.264/AAC, capped at a 1920px longest edge and 30fps, CRF23.
+Video is normalized to H.264/AAC, capped at a 1920px longest edge and 2fps, CRF23.
 Higher-resolution and higher-FPS inputs are accepted; these caps apply to the
 temporary upload, leaving the original untouched. Reducing resolution/frame rate
 reduces upload size; token savings depend on the selected model/provider.
+`MEDIA_VIDEO_MAX_FPS` is configurable. The default 2 FPS cap reduces local
+encoding and upload work while matching Qwen's documented default sampling rate;
+it does not guarantee fewer model tokens than uploading a higher-FPS file. At low
+FPS, very short clips can have their video duration rounded up by one frame period;
+no additional source frames outside the requested range are uploaded, and audio
+retains its requested duration. Local `inspect_media` measurements keep the source
+frame rate.
 Audio-only input is encoded as 128kbps MP3. The first audio stream is used.
 These settings can lose fine text, rapid events, alternate audio tracks or spatial
 audio detail; every result reports preprocessing. Raise the video settings or
 select shorter ranges for precise visual investigation. Provider-side sampling
 can miss details even with a detailed prompt. Clips use the normal file timeline;
 unusual source timestamps and edit lists may require normalization first.
+
+Encoded frame rate and model sampling rate are different controls. Raising
+`MEDIA_VIDEO_MAX_FPS` preserves more frames in the upload; it does not force the
+provider to inspect them. Fast, sub-second events and small HUD elements need
+targeted verification; a confident model description is not a frame measurement.
+The tools currently accept local file paths. YouTube URL support requires a
+separate input path and compatible provider routing; a model switch alone does
+not enable URLs in these tools.
 
 After changing `.env`, recreate this project so the container receives changes:
 
@@ -277,6 +321,7 @@ uv run python scripts/smoke_test.py --path /absolute/path/demo.mp4 \
 - [OpenRouter video input](https://openrouter.ai/docs/guides/overview/multimodal/videos)
 - [OpenRouter audio input](https://openrouter.ai/docs/guides/overview/multimodal/audio)
 - [Qwen3.8 Omni Flash](https://openrouter.ai/qwen/qwen3.8-omni-flash)
+- [Gemini 3.5 Flash Lite](https://openrouter.ai/google/gemini-3.5-flash-lite)
 - [FFmpeg measurement filters](https://ffmpeg.org/ffmpeg-filters.html)
 - [Docker restart policies](https://docs.docker.com/engine/containers/start-containers-automatically/)
 - [WSL systemd](https://learn.microsoft.com/en-us/windows/wsl/systemd)

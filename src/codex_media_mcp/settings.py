@@ -6,8 +6,11 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Settings:
     api_key: str = ""
-    model: str = "qwen/qwen3.8-omni-flash"
+    model: str = "google/gemini-3.5-flash-lite"
     audio_model: str = ""
+    provider: str = ""
+    reasoning_effort: str = "default"
+    reasoning_max_tokens: int | None = None
     host_fs_root: Path = Path("/")
     segment_seconds: float = 300
     max_segments: int = 12
@@ -20,7 +23,7 @@ class Settings:
     inspect_timeout: float = 900
     inspect_max_intervals: int = 100
     video_max_edge: int = 1920
-    video_max_fps: int = 30
+    video_max_fps: int = 2
     video_crf: int = 23
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
@@ -47,10 +50,28 @@ class Settings:
         edge = integer("MEDIA_VIDEO_MAX_EDGE", 1920)
         if edge < 2:
             raise ValueError("MEDIA_VIDEO_MAX_EDGE must be at least 2")
+        reasoning = os.getenv("MEDIA_REASONING_EFFORT", "default").strip().lower()
+        if reasoning not in {"default", "none", "minimal", "low", "medium", "high", "xhigh", "max"}:
+            raise ValueError(
+                "MEDIA_REASONING_EFFORT must be default, none, minimal, low, "
+                "medium, high, xhigh or max"
+            )
+        reasoning_budget = (
+            integer("MEDIA_REASONING_MAX_TOKENS", 1)
+            if os.getenv("MEDIA_REASONING_MAX_TOKENS", "").strip()
+            else None
+        )
+        if reasoning_budget is not None and reasoning != "default":
+            raise ValueError(
+                "Use MEDIA_REASONING_EFFORT=default when setting MEDIA_REASONING_MAX_TOKENS"
+            )
         return cls(
             api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
             model=os.getenv("OPENROUTER_MODEL", cls.model).strip() or cls.model,
             audio_model=os.getenv("OPENROUTER_AUDIO_MODEL", "").strip(),
+            provider=os.getenv("OPENROUTER_PROVIDER", "").strip(),
+            reasoning_effort=reasoning,
+            reasoning_max_tokens=reasoning_budget,
             host_fs_root=Path(os.getenv("MEDIA_HOST_FS_ROOT", "/")),
             segment_seconds=number("MEDIA_SEGMENT_SECONDS", 300),
             max_segments=integer("MEDIA_MAX_SEGMENTS", 12),
@@ -63,7 +84,7 @@ class Settings:
             inspect_timeout=number("MEDIA_INSPECT_TIMEOUT_SECONDS", 900),
             inspect_max_intervals=integer("MEDIA_INSPECT_MAX_INTERVALS", 100),
             video_max_edge=edge,
-            video_max_fps=integer("MEDIA_VIDEO_MAX_FPS", 30),
+            video_max_fps=integer("MEDIA_VIDEO_MAX_FPS", 2),
             video_crf=crf,
             ffmpeg=os.getenv("MEDIA_FFMPEG_BIN", "ffmpeg"),
             ffprobe=os.getenv("MEDIA_FFPROBE_BIN", "ffprobe"),
